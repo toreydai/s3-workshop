@@ -368,6 +368,8 @@ echo "Job created: ${JOB_ID}"
 
 **预期输出**：`Job created: <job-id>`
 
+> ⚠️ `create-job` 返回 JobId 后，`list-jobs --job-statuses Suspended` 可能有几秒的传播延迟，紧接着查询会返回空列表（`Jobs[0].JobId` 为 `None`）。若下一步 `update-job-status` 报 `Invalid length for parameter JobId`，说明取到的是 `None`，直接重试一次 `list-jobs` 即可。
+
 Batch Operations 任务默认需要手动确认才能执行（`--confirmation-required`）。确认后任务进入 `Active` 状态开始处理：
 
 ```bash

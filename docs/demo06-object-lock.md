@@ -1,4 +1,4 @@
-# Demo05 — S3 Object Lock：WORM 合规存储
+# Demo06 — S3 Object Lock：WORM 合规存储
 
 ## 实验简介
 

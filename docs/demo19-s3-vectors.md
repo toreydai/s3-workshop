@@ -52,7 +52,7 @@ aws s3vectors create-vector-bucket --vector-bucket-name "${VECTOR_BUCKET}"
 echo "Vector bucket created: ${VECTOR_BUCKET}"
 ```
 
-**预期输出**：`Vector bucket created: s3-workshop-vectors-<ACCOUNT_ID>`
+**预期输出**：`create-vector-bucket` 本身会打印一段 JSON（`{"vectorBucketArn": "arn:aws:s3vectors:..."}`），随后是 `Vector bucket created: s3-workshop-vectors-<ACCOUNT_ID>`
 
 ### 2. 创建 Vector Index
 
@@ -69,14 +69,16 @@ aws s3vectors create-index \
   --dimension 1024 \
   --distance-metric "cosine"
 
-aws s3vectors list-indexes --vector-bucket-name "${VECTOR_BUCKET}" \
-  --query 'indexes[].{Name:indexName, Dim:dimension, Metric:distanceMetric}'
+aws s3vectors get-index --vector-bucket-name "${VECTOR_BUCKET}" --index-name "support-tickets" \
+  --query '{Name:index.indexName, Dim:index.dimension, Metric:index.distanceMetric}'
 ```
 
 **预期输出**：
 ```json
-[{"Name": "support-tickets", "Dim": 1024, "Metric": "cosine"}]
+{"Name": "support-tickets", "Dim": 1024, "Metric": "cosine"}
 ```
+
+> ⚠️ `list-indexes` 返回的每个元素只有 `vectorBucketName`/`indexName`/`indexArn`/`creationTime`，**不包含** `dimension`/`distanceMetric`/`dataType` 字段——用它取维度或距离度量会静默拿到 `null`。要查这些参数必须用 `get-index`（单个索引的详情接口）。
 
 ### 3. 生成向量并写入索引
 
@@ -216,7 +218,7 @@ VECTOR_BUCKET="s3-workshop-vectors-${ACCOUNT_ID}" INDEX_NAME="support-tickets" p
 
 | # | 检查命令（自给自足，无 shell 变量依赖） | 期望精确输出 |
 |---|----------------------------------------|-------------|
-| 1 | `aws s3vectors list-indexes --vector-bucket-name "s3-workshop-vectors-$(aws sts get-caller-identity --query Account --output text)" --query 'indexes[0].dimension' --output text` | `1024` |
+| 1 | `aws s3vectors get-index --vector-bucket-name "s3-workshop-vectors-$(aws sts get-caller-identity --query Account --output text)" --index-name support-tickets --query 'index.dimension' --output text` | `1024` |
 | 2 | `aws s3vectors list-vectors --vector-bucket-name "s3-workshop-vectors-$(aws sts get-caller-identity --query Account --output text)" --index-name support-tickets --query 'length(vectors)' --output text` | `5` |
 
 ---

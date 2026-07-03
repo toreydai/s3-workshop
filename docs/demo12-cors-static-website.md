@@ -42,7 +42,7 @@ echo "Bucket: ${BUCKET_NAME}"
 
 ### 1. 创建网站存储桶并上传内容
 
-CloudFront + OAC 架构下，存储桶**不需要**开启 Public Access，访问权限通过 Bucket Policy 授予 CloudFront 服务主体。直接用 S3 静态网站端点则需要公开，OAC 是更安全的现代做法。
+CloudFront + OAC 架构下，网站主体内容（`index.html`/`error.html`）**不需要**开启 Public Access，访问权限通过 Bucket Policy 授予 CloudFront 服务主体。直接用 S3 静态网站端点则需要公开，OAC 是更安全的现代做法。本实验第 4 步会额外为 `api/*` 前缀单独开一个窄范围的公开直读策略，用于后续 CORS 演示，网站主体本身不受影响。
 
 ```bash
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
@@ -53,7 +53,7 @@ aws s3api create-bucket \
 echo "Bucket created: ${BUCKET_NAME}"
 ```
 
-**预期输出**：`Bucket created: s3-workshop-website-<ACCOUNT_ID>`
+**预期输出**：`create-bucket` 返回 `Location`/`BucketArn` 的 JSON，随后一行 `Bucket created: s3-workshop-website-<ACCOUNT_ID>`
 
 上传网站页面和一份用于后续 CORS 演示的 JSON 数据（模拟前端跨源读取的 API 数据）：
 ```bash
@@ -145,13 +145,21 @@ DISTRIBUTION_ID=$(aws cloudfront create-distribution \
     },
     \"DefaultRootObject\": \"index.html\",
     \"CustomErrorResponses\": {
-      \"Quantity\": 1,
-      \"Items\": [{
-        \"ErrorCode\": 404,
-        \"ResponsePagePath\": \"/error.html\",
-        \"ResponseCode\": \"404\",
-        \"ErrorCachingMinTTL\": 10
-      }]
+      \"Quantity\": 2,
+      \"Items\": [
+        {
+          \"ErrorCode\": 404,
+          \"ResponsePagePath\": \"/error.html\",
+          \"ResponseCode\": \"404\",
+          \"ErrorCachingMinTTL\": 10
+        },
+        {
+          \"ErrorCode\": 403,
+          \"ResponsePagePath\": \"/error.html\",
+          \"ResponseCode\": \"404\",
+          \"ErrorCachingMinTTL\": 10
+        }
+      ]
     },
     \"Enabled\": true,
     \"HttpVersion\": \"http2\"
@@ -171,10 +179,13 @@ echo "${DISTRIBUTION_ID}"
 ```
 
 > ⚠️ CloudFront 分发创建后需要约 5-10 分钟才能部署到所有边缘节点，状态从 `InProgress` 变为 `Deployed` 才可访问。
+> ⚠️ `CustomErrorResponses` 必须同时映射 404 **和** 403：使用 OAC 时，CloudFront 调用者没有 `s3:ListBucket` 权限，S3 对不存在的对象会返回 `403 AccessDenied` 而不是 `404 NoSuchKey`（避免暴露桶内对象列表）。只配置 404 的话，访问不存在的路径会直接看到 S3 返回的原始 XML 错误，自定义 404 页面永远不会命中。
 
-### 4. 为 S3 配置 Bucket Policy 授权 CloudFront
+### 4. 为 S3 配置 Bucket Policy 授权 CloudFront，并放开 `api/*` 的公开直读
 
 只有添加了 Bucket Policy，CloudFront 才能访问私有存储桶中的对象。`AWS:SourceArn` 条件将权限锁定到特定分发，防止其他 CloudFront 分发也能读取此桶。
+
+这里同一个桶还要承担后续 CORS 演示的角色：`api/data.json` 需要允许浏览器绕开 CDN 直连 S3 区域端点读取。桶策略里额外加一条 `PublicReadApiData` 语句，只对 `api/*` 前缀开放匿名 `s3:GetObject`，网站主体（`index.html` 等）仍然只能通过 CloudFront+OAC 访问。
 
 ```bash
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
@@ -183,27 +194,45 @@ DISTRIBUTION_ID=$(aws cloudfront list-distributions \
   --query "DistributionList.Items[?Comment=='S3 Workshop Static Website'].Id" \
   --output text)
 
+# S3 新建桶默认开启 Block Public Access 全部四项，必须先放开 BlockPublicPolicy /
+# RestrictPublicBuckets 两项，桶策略中的公开语句才允许写入生效；ACL 相关两项保持开启。
+aws s3api put-public-access-block \
+  --bucket "${BUCKET_NAME}" \
+  --public-access-block-configuration \
+    BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=false,RestrictPublicBuckets=false
+
 aws s3api put-bucket-policy \
   --bucket "${BUCKET_NAME}" \
   --policy "{
     \"Version\": \"2012-10-17\",
-    \"Statement\": [{
-      \"Sid\": \"AllowCloudFrontOAC\",
-      \"Effect\": \"Allow\",
-      \"Principal\": {\"Service\": \"cloudfront.amazonaws.com\"},
-      \"Action\": \"s3:GetObject\",
-      \"Resource\": \"arn:aws:s3:::${BUCKET_NAME}/*\",
-      \"Condition\": {
-        \"StringEquals\": {
-          \"AWS:SourceArn\": \"arn:aws:cloudfront::${ACCOUNT_ID}:distribution/${DISTRIBUTION_ID}\"
+    \"Statement\": [
+      {
+        \"Sid\": \"AllowCloudFrontOAC\",
+        \"Effect\": \"Allow\",
+        \"Principal\": {\"Service\": \"cloudfront.amazonaws.com\"},
+        \"Action\": \"s3:GetObject\",
+        \"Resource\": \"arn:aws:s3:::${BUCKET_NAME}/*\",
+        \"Condition\": {
+          \"StringEquals\": {
+            \"AWS:SourceArn\": \"arn:aws:cloudfront::${ACCOUNT_ID}:distribution/${DISTRIBUTION_ID}\"
+          }
         }
+      },
+      {
+        \"Sid\": \"PublicReadApiData\",
+        \"Effect\": \"Allow\",
+        \"Principal\": \"*\",
+        \"Action\": \"s3:GetObject\",
+        \"Resource\": \"arn:aws:s3:::${BUCKET_NAME}/api/*\"
       }
-    }]
+    ]
   }"
 echo "Bucket policy updated for CloudFront distribution: ${DISTRIBUTION_ID}"
 ```
 
 **预期输出**：`Bucket policy updated for CloudFront distribution: <distribution-id>`
+
+> ⚠️ 本实验把 CORS 演示合并进了 CloudFront 网站同一个桶。如果跳过 `put-public-access-block` 和 `PublicReadApiData` 语句，第 9 步的正式 GET 请求会返回 `403 Forbidden`（而不是带 CORS 头的 JSON）——因为 CORS 预检（OPTIONS）本身不需要 `s3:GetObject` 权限，S3 只按 CORS 规则放行 OPTIONS，但真正的 GET 仍然要走桶策略鉴权，而桶策略此时只信任 CloudFront 服务主体。生产环境中应像这里一样，只对明确要公开跨源读取的前缀（如 `api/*`）开权限，网站资源本身仍然锁定给 CloudFront。
 
 ### 5. 等待分发就绪并验证访问
 
@@ -229,6 +258,17 @@ curl -s "https://${CF_DOMAIN}" | grep -o "<h1>.*</h1>"
 ```
 
 **预期输出**：`<h1>欢迎来到 S3 Workshop</h1>`
+
+验证自定义 404 页面（访问不存在的路径）：
+```bash
+CF_DOMAIN=$(aws cloudfront list-distributions \
+  --query "DistributionList.Items[?Comment=='S3 Workshop Static Website'].DomainName" \
+  --output text)
+curl -s -o /dev/null -w "%{http_code}\n" "https://${CF_DOMAIN}/nonexistent-page"
+curl -s "https://${CF_DOMAIN}/nonexistent-page" | grep -o "<h1>.*</h1>"
+```
+
+**预期输出**：`404`，接着 `<h1>404</h1>`
 
 ### 6. 验证无 CORS 配置时浏览器直连 S3 被拒绝
 
@@ -326,11 +366,14 @@ HTTP/1.1 200 OK
 Access-Control-Allow-Origin: https://myapp.example.com
 Access-Control-Allow-Methods: GET, PUT, POST, DELETE, HEAD
 Access-Control-Allow-Headers: content-type
+Access-Control-Expose-Headers: ETag, x-amz-server-side-encryption, x-amz-request-id, x-amz-id-2
 Access-Control-Max-Age: 3600
+Access-Control-Allow-Credentials: true
 Vary: Origin, Access-Control-Request-Headers, Access-Control-Request-Method
 ```
 
 > ⚠️ `Access-Control-Allow-Headers` 响应头返回的是请求中实际包含的 Header 名称（小写），而非规则中配置的通配符 `*`。这是 S3 的标准 CORS 行为：S3 根据请求的 `Access-Control-Request-Headers` 匹配规则，返回实际被允许的 Header 列表，而非原始配置值。
+> ⚠️ 实测中 S3 在 Preflight 响应里还会带上 `Access-Control-Expose-Headers` 和 `Access-Control-Allow-Credentials: true`（规则未显式配置凭证相关字段也会返回，因为 `AllowedOrigins` 用了精确域名而非 `*`）。这两项不影响预检放行判断，可忽略。
 
 ### 9. 验证正式 GET 请求携带 CORS 头
 
@@ -348,10 +391,16 @@ curl -s -D - \
 ```
 HTTP/1.1 200 OK
 Access-Control-Allow-Origin: https://myapp.example.com
+Access-Control-Allow-Methods: GET, PUT, POST, DELETE, HEAD
 Access-Control-Expose-Headers: ETag, x-amz-server-side-encryption, x-amz-request-id, x-amz-id-2
+Access-Control-Max-Age: 3600
+Access-Control-Allow-Credentials: true
+Vary: Origin, Access-Control-Request-Headers, Access-Control-Request-Method
 
 {"status": "ok", "data": [1, 2, 3]}
 ```
+
+> ⚠️ 这一步能拿到 200 而不是 403，前提是第 4 步已经给 `api/*` 加了公开直读策略——否则 CORS 头会正常出现在预检里，但真正的 GET 仍会被桶策略拒绝（403 AccessDenied），是本实验合并两个 Demo 后最容易踩的坑。
 
 ### 10. 验证不匹配 Origin 被拒绝
 
@@ -393,7 +442,14 @@ curl -s -D - -o /dev/null \
 HTTP/1.1 200 OK
 Access-Control-Allow-Origin: http://localhost:3000
 Access-Control-Allow-Methods: GET, PUT, POST, DELETE, HEAD
+Access-Control-Allow-Headers: content-type, x-amz-acl
+Access-Control-Expose-Headers: ETag, x-amz-server-side-encryption, x-amz-request-id, x-amz-id-2
+Access-Control-Max-Age: 3600
+Access-Control-Allow-Credentials: true
+Vary: Origin, Access-Control-Request-Headers, Access-Control-Request-Method
 ```
+
+> ⚠️ 该 `uploads/user-file.jpg` 对象并不存在，也不在公开的 `api/*` 前缀内——但 OPTIONS 预检不需要 `s3:GetObject` 权限，S3 仅按 CORS 规则判定是否放行，所以预检照常返回 200。这一步只演示"预检通过"，并不代表匿名 PUT 真的会成功；真实上传场景仍需搭配预签名 URL 提供的临时授权。
 
 ---
 
@@ -445,7 +501,7 @@ Access-Control-Allow-Methods: GET, PUT, POST, DELETE, HEAD
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 BUCKET_NAME="s3-workshop-website-${ACCOUNT_ID}"
 
-# 禁用并删除 CloudFront 分发（必须先禁用）
+# 禁用并删除 CloudFront 分发（必须先禁用，再等分发把"禁用"这次变更部署完才能删除）
 DISTRIBUTION_ID=$(aws cloudfront list-distributions \
   --query "DistributionList.Items[?Comment=='S3 Workshop Static Website'].Id" \
   --output text)
@@ -458,8 +514,20 @@ if [ -n "${DISTRIBUTION_ID}" ]; then
   aws cloudfront update-distribution \
     --id "${DISTRIBUTION_ID}" --if-match "${ETAG}" \
     --distribution-config "${CONFIG}" > /dev/null
-  echo "Distribution disabled. Wait ~5 min then run delete manually:"
-  echo "aws cloudfront delete-distribution --id ${DISTRIBUTION_ID} --if-match \$(aws cloudfront get-distribution --id ${DISTRIBUTION_ID} --query ETag --output text)"
+  echo "Distribution disable requested, waiting for it to finish deploying (usually 2-5 min)..."
+
+  # 轮询直到 Status=Deployed 且 Enabled=False，再执行真正的删除
+  for i in $(seq 1 24); do
+    STATUS=$(aws cloudfront get-distribution --id "${DISTRIBUTION_ID}" --query 'Distribution.Status' --output text)
+    ENABLED=$(aws cloudfront get-distribution --id "${DISTRIBUTION_ID}" --query 'Distribution.DistributionConfig.Enabled' --output text)
+    echo "  [$i] Status=${STATUS} Enabled=${ENABLED}"
+    [ "${STATUS}" = "Deployed" ] && [ "${ENABLED}" = "False" ] && break
+    sleep 30
+  done
+
+  FINAL_ETAG=$(aws cloudfront get-distribution --id "${DISTRIBUTION_ID}" --query ETag --output text)
+  aws cloudfront delete-distribution --id "${DISTRIBUTION_ID}" --if-match "${FINAL_ETAG}"
+  echo "Distribution deleted: ${DISTRIBUTION_ID}"
 fi
 
 # 删除 OAC
@@ -476,3 +544,5 @@ aws s3 rm "s3://${BUCKET_NAME}" --recursive
 aws s3api delete-bucket --bucket "${BUCKET_NAME}" --region us-east-1
 echo "Bucket deleted: ${BUCKET_NAME}"
 ```
+
+> ⚠️ "禁用"分发本身也是一次分发配置变更，同样要等 `Status` 从 `InProgress` 变回 `Deployed` 才能删除（实测约 2-5 分钟），不要在禁用后立刻调用 `delete-distribution`，会报 `DistributionNotDisabled` / `PreconditionFailed`。上面的脚本已经内置轮询，全程约 3-8 分钟跑完。

@@ -1,4 +1,4 @@
-# Demo16 — S3 事件通知与 EventBridge 集成
+# Demo15 — S3 事件通知与 EventBridge 集成
 
 ## 实验简介
 

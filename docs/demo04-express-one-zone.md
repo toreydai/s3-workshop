@@ -73,9 +73,11 @@ for ZONE_ID in use1-az4 use1-az5 use1-az6 use1-az1 use1-az2; do
 done
 ```
 
-**预期输出**：`Created directory bucket: s3wkshp<后8位账号ID>--use1-azN--x-s3 (Zone: use1-azN)`
+**预期输出**：`aws s3api create-bucket` 成功时先打印一段 JSON（`Location`/`BucketArn`，例如 `arn:aws:s3express:us-east-1:<ACCOUNT_ID>:bucket/s3wkshp<后8位账号ID>--use1-azN--x-s3`），随后是 `Created directory bucket: s3wkshp<后8位账号ID>--use1-azN--x-s3 (Zone: use1-azN)`
 
 > ⚠️ Directory Bucket 名称长度、字符集要求比普通桶更严格，建议用不含连字符歧义的短前缀（本实验用账号 ID 后 8 位保证唯一性，避免与他人 Directory Bucket 命名冲突）。
+>
+> 实测（us-east-1，2026-07）：候选列表里的第一个 Zone ID `use1-az4` 就创建成功，循环没有触发到后面的候选项——这是正常情况，不代表后面的 Zone ID 一定不可用，只是账号/区域当前的可用性使然。
 
 ### 2. 创建普通桶作为对照组
 
@@ -110,9 +112,9 @@ time ( for i in $(seq 1 10); do
 done )
 ```
 
-**预期输出**：两组 `real` 耗时对比，Directory Bucket 的总耗时明显更低（具体倍数受本机到 AWS 的网络路径影响，控制台/EC2 同 AZ 内发起请求时差异最明显；从跨区域的客户端发起两组请求都会被公网延迟摊平，倍数差会缩小，但 Directory Bucket 仍应更快）
+**预期输出**：两组 `real` 耗时对比，理论上 Directory Bucket 更快，但实测差异取决于客户端所在位置（见下方 ⚠️）
 
-> 本实验的时延对比在任意客户端都能跑通，但 S3 Express One Zone"个位数毫秒"的官方指标是在**同 AZ 内的 EC2/EKS/ECS 实例**发起请求时测得的——如果操作机就在 `use1-azN` 对应的可用区内，效果会更明显。
+> ⚠️ 实测（非 EC2 客户端，跨区域访问）：Directory Bucket 10 次 PUT 耗时反而与普通桶持平甚至略慢（如 8.3s vs 5.4s，重复一轮后 5.8s vs 5.4s）。原因是这里每次 `aws s3api put-object` 都是一次独立的 CLI 进程调用，进程启动 + 凭证加载的固定开销（约 400-500ms/次）远大于 S3 Express 在请求处理链路上省下的几毫秒；而且 Directory Bucket 每次都要在底层隐式建立/续期 `s3express:CreateSession`，这部分开销在跨区域场景下会被放大。**这不代表 Express One Zone 不够快**——它的"个位数毫秒"优势是在**同 AZ 内的 EC2/EKS/ECS 实例**、用同一进程内的 SDK 客户端连续发多个请求（复用 session、无进程启动开销）时才能体现。用本实验这种"每次一个新 CLI 进程"的方法测，测的主要是 CLI 冷启动开销，不是 S3 本身的延迟，仅供了解概念，不要用这个数字下结论；如果操作机就在 `use1-azN` 对应的可用区内并用长连接 SDK 客户端测试，效果会明显得多。
 
 ### 4. 验证 IAM 权限模型
 
@@ -134,7 +136,7 @@ aws s3api create-session \
 echo "... (会话令牌已获取，说明 s3express:CreateSession 权限生效)"
 ```
 
-**预期输出**：一段会话令牌前缀 + 提示信息
+**预期输出**：一段会话令牌前缀（如 `AwAAAAQAAABFUpNvOc/0...`） + 提示信息 `... (会话令牌已获取，说明 s3express:CreateSession 权限生效)`
 
 ### 5. 验证存储类型限制
 
@@ -157,7 +159,7 @@ aws s3api head-object \
 完成本实验后，你应当能够：
 - [ ] 成功创建符合 `base--zone-id--x-s3` 命名规则的 Directory Bucket
 - [ ] Directory Bucket 中对象的 `StorageClass` 为 `EXPRESS_ONEZONE`
-- [ ] 实测到 Directory Bucket 的 PUT 耗时低于同批次普通桶
+- [ ] 完成两组 PUT 耗时的实测对比，并理解为什么在非 EC2/跨区域客户端上 Directory Bucket 不一定表现出更低耗时（见步骤 3 的 ⚠️ 说明）
 - [ ] 理解 `s3express:CreateSession` 权限模型与普通桶 `s3:PutObject` 的区别
 
 ---

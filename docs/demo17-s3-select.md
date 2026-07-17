@@ -15,7 +15,7 @@ S3 Select 允许直接在 S3 服务端对 CSV、JSON、Parquet 对象执行 SQL 
 3. 对 JSON 文件执行 S3 Select 查询
 4. 比较 Select 与全量下载的数据量差异
 
-**预计时长：** 20 分钟
+**预计 AI 执行时长：** 20 分钟
 
 ---
 

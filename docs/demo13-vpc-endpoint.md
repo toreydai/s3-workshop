@@ -15,7 +15,7 @@
 3. 配置 Endpoint Policy 和 Bucket Policy
 4. 验证私网访问路径
 
-**预计时长：** 45 分钟
+**预计 AI 执行时长：** 45 分钟
 
 ---
 

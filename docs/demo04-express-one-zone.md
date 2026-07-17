@@ -17,7 +17,7 @@ S3 Express One Zone 是 2023 年推出、持续扩展到更多区域的高性能
 4. 验证 IAM 权限模型（`s3express:CreateSession`）
 5. 验证 Directory Bucket 的存储类型限制
 
-**预计时长：** 25 分钟
+**预计 AI 执行时长：** 25 分钟
 
 ---
 
@@ -114,7 +114,7 @@ done )
 
 **预期输出**：两组 `real` 耗时对比，理论上 Directory Bucket 更快，但实测差异取决于客户端所在位置（见下方 ⚠️）
 
-> ⚠️ 实测（非 EC2 客户端，跨区域访问）：Directory Bucket 10 次 PUT 耗时反而与普通桶持平甚至略慢（如 8.3s vs 5.4s，重复一轮后 5.8s vs 5.4s）。原因是这里每次 `aws s3api put-object` 都是一次独立的 CLI 进程调用，进程启动 + 凭证加载的固定开销（约 400-500ms/次）远大于 S3 Express 在请求处理链路上省下的几毫秒；而且 Directory Bucket 每次都要在底层隐式建立/续期 `s3express:CreateSession`，这部分开销在跨区域场景下会被放大。**这不代表 Express One Zone 不够快**——它的"个位数毫秒"优势是在**同 AZ 内的 EC2/EKS/ECS 实例**、用同一进程内的 SDK 客户端连续发多个请求（复用 session、无进程启动开销）时才能体现。用本实验这种"每次一个新 CLI 进程"的方法测，测的主要是 CLI 冷启动开销，不是 S3 本身的延迟，仅供了解概念，不要用这个数字下结论；如果操作机就在 `use1-azN` 对应的可用区内并用长连接 SDK 客户端测试，效果会明显得多。
+> ⚠️ 非 EC2 客户端跨区域访问时，Directory Bucket 实测耗时可能与普通桶持平甚至略慢——每次 `aws s3api put-object` 都是独立 CLI 进程调用，进程启动+凭证加载的固定开销远大于 S3 Express 省下的几毫秒。这不代表 Express One Zone 不够快：它的低延迟优势要在同 AZ 内用长连接 SDK 客户端连续发请求才能体现，本实验这种"每次新起 CLI 进程"的测法测的主要是 CLI 冷启动开销，仅供了解概念。
 
 ### 4. 验证 IAM 权限模型
 

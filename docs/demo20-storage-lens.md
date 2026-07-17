@@ -15,7 +15,7 @@ S3 Storage Lens 提供跨账号、跨 Region 的统一存储可见性，包含 3
 3. 等待数据收集后查询指标
 4. 解读关键优化建议
 
-**预计时长：** 25 分钟（指标数据次日可用）
+**预计 AI 执行时长：** 25 分钟（指标数据次日可用）
 
 ---
 
@@ -162,7 +162,7 @@ echo "Storage Lens dashboard configured: s3-workshop-lens-dashboard"
 
 **预期输出**：`Storage Lens dashboard configured: s3-workshop-lens-dashboard`
 
-> ⚠️ 实测 Storage Lens 的高级指标类别（`ActivityMetrics`、`AdvancedCostOptimizationMetrics`、`AdvancedDataProtectionMetrics`、`DetailedStatusCodesMetrics`）是"全有或全无"绑定关系：只要其中任意一项设为 `IsEnabled: true`，其余几项也必须同时设为 `true`（账号级和桶级都要一致），否则报 `MissingBucketLevelAdvancedCostOptimizationMetrics`、`AdvancedCostOptimizationMetricsMustEnabled` 或 `AdvancedDataProtectionMetricsMustEnabled`。原文档尝试只开 `ActivityMetrics`/`DetailedStatusCodesMetrics` 而关闭另外两项会报错，已改为四项全部 `true`（同时需删除 `PrefixLevel.StorageMetrics` 配置块，否则同样触发"请求了未启用的高级指标"错误）。高级指标为付费功能（约 $0.20/百万对象/月），演示规模下成本可忽略。
+> ⚠️ Storage Lens 的 4 个高级指标类别是"全有或全无"绑定关系：只要开启其中一项，其余几项也必须同时为 `true`，否则报 `MissingBucketLevelAdvancedCostOptimizationMetrics` 等错误（下方已四项全开，并删除了会冲突的 `PrefixLevel.StorageMetrics` 配置块）。高级指标为付费功能（约 $0.20/百万对象/月），演示规模下成本可忽略。
 
 验证配置：
 ```bash
